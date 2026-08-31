@@ -1,0 +1,6 @@
+# dsh-session-cleaner bundle patch
+# 会话清理插件：删除当前/单个/全部会话，删除前可选备份
+- insert:
+    - id: session-cleaner
+      name: dsh-session-cleaner
+      config: {}
