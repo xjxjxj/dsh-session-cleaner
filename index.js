@@ -1,4 +1,4 @@
-// dsh-session-cleaner —— dsh 会话清理插件（服务端）
+﻿// dsh-session-cleaner —— dsh 会话清理插件（服务端）
 // 功能：删除当前会话 / 删除单个会话 / 清空所有会话（保留工作区），删除前可选备份
 // 删除核心逻辑复用 dsh-plugin-session-delete（MIT）的完整流程：
 //   停运行中的 agent -> flush 会话 -> 内存 detach -> 删磁盘日志 -> 清 projection 缓存 -> 清 workspace 记账
@@ -369,7 +369,7 @@ export function apply(ctx) {
     name: 'session_cleaner_list',
     description: 'List all sessions of this dsh workbench (sessionId, title, running).',
     parameters: {},
-    output: { schema: { type: 'string' } },
+    output: { schema: { type: 'string' }, render: (_a, v) => String(v) },
     async execute() {
       const list = await listSessions(ctx)
       return JSON.stringify({ total: list.length, sessions: list }, null, 2)
@@ -383,7 +383,7 @@ export function apply(ctx) {
       sessionId: { type: 'string', required: true, description: 'session id (uuid or session-<uuid>)' },
       backup: { type: 'boolean', description: 'backup sessions before delete (default true)' },
     },
-    output: { schema: { type: 'string' } },
+    output: { schema: { type: 'string' }, render: (_a, v) => String(v) },
     async execute(args) {
       const sessionId = String(args.sessionId || '').trim()
       let backupPath = null
@@ -405,7 +405,7 @@ export function apply(ctx) {
     parameters: {
       backup: { type: 'boolean', description: 'backup sessions before delete (default true)' },
     },
-    output: { schema: { type: 'string' } },
+    output: { schema: { type: 'string' }, render: (_a, v) => String(v) },
     async execute(args) {
       let backupPath = null
       if (args.backup !== false) {
