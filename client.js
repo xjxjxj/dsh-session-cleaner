@@ -1,4 +1,5 @@
-// dsh-session-cleaner —— 前端：浮动"清理会话"按钮 + 弹窗（删除当前/单个/全部，删除前询问是否备份）
+// dsh-session-cleaner —— 前端：浮动"清理会话"按钮 + 弹窗（删除当前/单个/全部 + 回收站管理）
+// v0.2.0：删除默认进回收站（可恢复），permanent 才物理删除；delete-current 需二次确认
 window.__ModuleLoader__.load({
   id: 'dsh-session-cleaner',
   factory: () => {
@@ -11,7 +12,7 @@ window.__ModuleLoader__.load({
   color:#111;font:600 13px Inter,system-ui,sans-serif;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.08);backdrop-filter:blur(8px)}
 .dsh-cleaner-btn:hover{background:#f3f4f6}
 .dsh-cleaner-mask{position:fixed;z-index:9999;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center}
-.dsh-cleaner-modal{width:420px;max-width:92vw;max-height:80vh;overflow:auto;background:#fff;border-radius:14px;
+.dsh-cleaner-modal{width:460px;max-width:92vw;max-height:80vh;overflow:auto;background:#fff;border-radius:14px;
   box-shadow:0 12px 40px rgba(0,0,0,.2);padding:20px;font:13px/1.6 Inter,system-ui,sans-serif;color:#111}
 .dsh-cleaner-modal h3{margin:0 0 6px;font-size:16px}
 .dsh-cleaner-sub{color:#6b7280;font-size:12px;margin-bottom:14px}
@@ -32,15 +33,20 @@ window.__ModuleLoader__.load({
 .dsh-cleaner-actions button:disabled{opacity:.5;cursor:not-allowed}
 .dsh-cleaner-status{margin-top:10px;font-size:12px;color:#374151;white-space:pre-wrap;word-break:break-all}
 .dsh-cleaner-confirm{position:fixed;z-index:10000;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center}
-.dsh-cleaner-confirm-box{width:340px;background:#fff;border-radius:14px;padding:18px;box-shadow:0 12px 40px rgba(0,0,0,.25);font:13px/1.6 Inter,system-ui,sans-serif}
+.dsh-cleaner-confirm-box{width:360px;background:#fff;border-radius:14px;padding:18px;box-shadow:0 12px 40px rgba(0,0,0,.25);font:13px/1.6 Inter,system-ui,sans-serif}
 .dsh-cleaner-confirm-box h4{margin:0 0 8px;font-size:14px}
 .dsh-cleaner-confirm-box p{margin:0 0 14px;color:#374151}
-.dsh-cleaner-confirm-box .row{display:flex;gap:8px;justify-content:flex-end}
+.dsh-cleaner-confirm-box .row{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
 .dsh-cleaner-confirm-box button{padding:7px 12px;border-radius:8px;border:1px solid #e5e7eb;background:#fff;cursor:pointer;font:600 12px Inter,system-ui,sans-serif}
 .dsh-cleaner-confirm-box button.primary{background:#111;border-color:#111;color:#fff}
 .dsh-cleaner-confirm-box button.primary:hover{background:#333}
 .dsh-cleaner-confirm-box button.danger{background:#b91c1c;border-color:#b91c1c;color:#fff}
 .dsh-cleaner-confirm-box button.danger:hover{background:#991b1b}
+.dsh-cleaner-trash-item{display:flex;gap:8px;align-items:center;padding:7px 10px;border-bottom:1px solid #f3f4f6}
+.dsh-cleaner-trash-item .t{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dsh-cleaner-trash-item .i{color:#9ca3af;font-size:11px}
+.dsh-cleaner-trash-item .age{color:#f59e0b;font-size:11px}
+.dsh-cleaner-trash-item button{padding:3px 8px;border-radius:6px;border:1px solid #e5e7eb;background:#fff;cursor:pointer;font:600 11px}
 `
       const style = document.createElement('style')
       style.textContent = css
@@ -60,37 +66,103 @@ window.__ModuleLoader__.load({
       // ---- api ----
       async function api(path, body) {
         const res = await fetch(path, {
-          method: 'POST',
+          method: body !== undefined ? 'POST' : 'GET',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(body || {}),
+          body: body !== undefined ? JSON.stringify(body) : undefined,
         })
         const data = await res.json().catch(() => ({}))
         if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
         return data
       }
 
-      // ---- confirm dialog (backup ask) ----
-      function askBackup(title, desc) {
+      // ---- delete mode dialog: 移入回收站 / 永久删除 / 取消 ----
+      function askDeleteMode(title, desc) {
         return new Promise(resolve => {
           const mask = document.createElement('div')
           mask.className = 'dsh-cleaner-confirm'
           mask.innerHTML = `<div class="dsh-cleaner-confirm-box">
             <h4>${title}</h4><p>${desc}</p>
+            <p style="font-size:12px;color:#6b7280">默认移入回收站，7 天内可随时恢复。</p>
             <div class="row">
               <button data-act="cancel">取消</button>
-              <button data-act="nobackup">不备份，直接删</button>
-              <button data-act="backup" class="primary">先备份再删</button>
+              <button data-act="trash" class="primary">移入回收站</button>
+              <button data-act="permanent" class="danger">永久删除</button>
             </div></div>`
           mask.addEventListener('click', e => {
             const act = e.target.getAttribute('data-act')
             if (!act) return
             mask.remove()
             if (act === 'cancel') resolve(null)
-            else if (act === 'nobackup') resolve(false)
-            else resolve(true)
+            else if (act === 'trash') resolve({ permanent: false })
+            else resolve({ permanent: true })
           })
           document.body.append(mask)
         })
+      }
+
+      // ---- trash panel ----
+      async function openTrash() {
+        const mask = document.createElement('div')
+        mask.className = 'dsh-cleaner-mask'
+        mask.innerHTML = `<div class="dsh-cleaner-modal">
+          <h3>🗑 回收站</h3>
+          <div class="dsh-cleaner-sub">默认删除的会话在这里，7 天后自动清理。可恢复或彻底清空。</div>
+          <div class="dsh-cleaner-list" id="trash-items">加载中…</div>
+          <div class="dsh-cleaner-actions">
+            <button data-act="purge-all" class="danger">清空回收站</button>
+            <button data-act="close" class="primary">关闭</button>
+          </div>
+          <div class="dsh-cleaner-status"></div>
+        </div>`
+        const status = mask.querySelector('.dsh-cleaner-status')
+        const setStatus = t => { status.textContent = t }
+        const listEl = mask.querySelector('#trash-items')
+        const render = async () => {
+          try {
+            const d = await api('/__session-cleaner/trash-list')
+            const items = d.trash || []
+            if (items.length === 0) {
+              listEl.innerHTML = '<div style="padding:10px;color:#9ca3af">回收站是空的</div>'
+              return
+            }
+            listEl.innerHTML = items.map(t =>
+              `<div class="dsh-cleaner-trash-item">
+                <span class="t" title="${t.sessionId}">${t.sessionId.slice(0, 8)}…${t.expired ? '（已过期）' : `（${t.ageDays}天前）`}</span>
+                <span class="i">${t.workspace || '?'}</span>
+                <button data-restore="${t.trashId}">恢复</button>
+                <button data-purge="${t.trashId}" style="border-color:#fecaca;color:#b91c1c">清除</button>
+              </div>`
+            ).join('')
+            listEl.querySelectorAll('[data-restore]').forEach(b => b.addEventListener('click', async () => {
+              try {
+                await api('/__session-cleaner/restore', { trashId: b.getAttribute('data-restore') })
+                setStatus('✅ 已恢复，刷新中…')
+                setTimeout(() => location.reload(), 800)
+              } catch (e) { setStatus('❌ ' + e.message) }
+            }))
+            listEl.querySelectorAll('[data-purge]').forEach(b => b.addEventListener('click', async () => {
+              try {
+                await api('/__session-cleaner/purge-trash', { trashId: b.getAttribute('data-purge') })
+                setStatus('已清除，刷新列表…')
+                render()
+              } catch (e) { setStatus('❌ ' + e.message) }
+            }))
+          } catch (e) { listEl.innerHTML = '<div style="padding:10px;color:#b91c1c">' + e.message + '</div>' }
+        }
+        mask.addEventListener('click', e => {
+          const act = e.target.getAttribute('data-act')
+          if (!act) return
+          if (act === 'close') return mask.remove()
+          if (act === 'purge-all') {
+            if (!confirm('确定清空整个回收站？此操作不可恢复。')) return
+            api('/__session-cleaner/purge-trash', { all: true }).then(r => {
+              setStatus(`✅ 已清空 ${r.purged} 项`)
+              render()
+            }).catch(e => setStatus('❌ ' + e.message))
+          }
+        })
+        document.body.append(mask)
+        render()
       }
 
       // ---- main modal ----
@@ -106,13 +178,14 @@ window.__ModuleLoader__.load({
         ).join('')
         mask.innerHTML = `<div class="dsh-cleaner-modal">
           <h3>🧹 会话清理</h3>
-          <div class="dsh-cleaner-sub">删除前会询问是否备份。删除后界面自动刷新。</div>
+          <div class="dsh-cleaner-sub">删除默认移入回收站（7 天内可恢复），也可选择永久删除。删除当前会话需二次确认。</div>
           ${current ? `<div class="dsh-cleaner-current">当前会话：<b>${current.title}</b>（${current.id.slice(0, 8)}）</div>` : '<div class="dsh-cleaner-current">未检测到当前会话</div>'}
           <div class="dsh-cleaner-list">${listHtml || '<div style="padding:10px;color:#9ca3af">没有会话</div>'}</div>
           <div class="dsh-cleaner-actions">
             <button data-act="delete-current" class="danger" ${current ? '' : 'disabled'}>删除当前会话</button>
             <button data-act="delete-selected" class="danger">删除选中</button>
             <button data-act="clear-all" class="danger">清空所有会话</button>
+            <button data-act="trash" class="">🗑 回收站</button>
             <button data-act="backup" class="primary">仅备份（不删）</button>
             <button data-act="close">关闭</button>
           </div>
@@ -126,15 +199,22 @@ window.__ModuleLoader__.load({
           for (const b of mask.querySelectorAll('button')) b.disabled = on
         }
         const runDelete = async (ids, all) => {
-          const desc = all ? `将永久删除全部 ${ids.length} 个会话（工作区保留）。`
-            : `将永久删除 ${ids.length} 个会话。`
-          const backup = await askBackup('确认删除', desc)
-          if (backup === null) { setStatus('已取消'); return }
+          const desc = all ? `将处理全部 ${ids.length} 个会话（工作区保留）。`
+            : `将处理 ${ids.length} 个会话。`
+          const mode = await askDeleteMode('确认删除', desc)
+          if (mode === null) { setStatus('已取消'); return }
+          const body = all
+            ? { permanent: mode.permanent }
+            : { sessionId: ids[0], permanent: mode.permanent }
+          // delete-current 额外二次确认（防误删当前会话）
+          if (!all && ids.length === 1 && selected().length === 1 && !confirm(`再次确认：删除会话「${ids[0].slice(0, 8)}」？`)) {
+            setStatus('已取消'); return
+          }
           busy(true)
           try {
-            const body = all ? { backup } : { sessionId: ids[0], backup }
             const r = await api(all ? '/__session-cleaner/clear-all' : '/__session-cleaner/delete', body)
-            setStatus(`✅ 已删除 ${all ? r.total : ids.length} 个会话\n备份：${r.backupPath || '无'}${r.results ? '\n' + r.results.map(x => `  ${x.ok ? '✓' : '✗'} ${x.title}`).join('\n') : ''}`)
+            const verb = mode.permanent ? '永久删除' : '移入回收站'
+            setStatus(`✅ 已${verb} ${all ? r.total : ids.length} 个会话${r.backupPath ? '\n备份：' + r.backupPath : ''}${r.results ? '\n' + r.results.map(x => `  ${x.ok ? '✓' : '✗'} ${x.title}`).join('\n') : ''}`)
             setTimeout(() => location.reload(), 1200)
           } catch (e) {
             setStatus('❌ ' + e.message)
@@ -145,6 +225,7 @@ window.__ModuleLoader__.load({
           const act = e.target.getAttribute('data-act')
           if (!act) return
           if (act === 'close') return mask.remove()
+          if (act === 'trash') { mask.remove(); openTrash(); return }
           if (act === 'delete-current') {
             if (current) runDelete([current.id], false)
             return
@@ -176,7 +257,7 @@ window.__ModuleLoader__.load({
       const btn = document.createElement('button')
       btn.className = 'dsh-cleaner-btn'
       btn.textContent = '🗑 清理会话'
-      btn.title = '删除当前/单个/全部会话'
+      btn.title = '删除当前/单个/全部会话 + 回收站管理'
       btn.addEventListener('click', openModal)
       document.body.append(btn)
 
